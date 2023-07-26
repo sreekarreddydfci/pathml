@@ -1,4 +1,4 @@
-name: pathml
+name: pathml_tiles
 
 channels:
     - conda-forge

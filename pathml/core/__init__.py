@@ -17,3 +17,5 @@ from .slide_dataset import SlideDataset
 from .slide_types import SlideType, types
 from .tile import Tile
 from .tiles import Tiles
+from .h5managers import h5pathManager
+# import .h5managers
