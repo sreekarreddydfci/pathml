@@ -29,3 +29,5 @@ dependencies:
         - anndata==0.7.8
         - tqdm==4.62.3
         - loguru==0.5.3
+        - jpype1==1.4.1
+        - tifffile==2023.8.30

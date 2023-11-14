@@ -3,7 +3,11 @@ import glob
 import jpype
 import tifffile
 import traceback
-
+import sys
+import subprocess
+import urllib
+import zipfile
+import platform
 
 class TileStitcher:
     """
@@ -12,11 +16,13 @@ class TileStitcher:
     Make sure QuPath and JDK are installed before using this class.
     """
 
-    def __init__(self, qupath_jarpath=[], java_path=None, memory="40g"):
+        
+    def __init__(self, qupath_jarpath=[], java_path=None, memory="40g", bfconvert_dir='./'):
         """
         Initialize the TileStitcher by setting up the Java Virtual Machine and QuPath environment.
         """
-
+        self.bfconvert_path = self.setup_bfconvert(bfconvert_dir)
+        
         if java_path:
             os.environ["JAVA_HOME"] = java_path
         else:
@@ -25,75 +31,159 @@ class TileStitcher:
         self.classpath = os.pathsep.join(qupath_jarpath)
         self.memory = memory
         self._start_jvm()
-
+        
     def __del__(self):
         """Ensure the JVM is shutdown when the object is deleted."""
-        jpype.shutdownJVM()
+        
+        if jpype.isJVMStarted():
+            jpype.shutdownJVM()
 
-    @staticmethod
-    def set_environment_paths():
+
+    def setup_bfconvert(self, bfconvert_dir):
+        
+        setup_dir = bfconvert_dir
+        parent_dir = os.path.dirname(setup_dir)
+        tools_dir = os.path.join(parent_dir, 'tools')
+        self.bfconvert_path = os.path.join(tools_dir, 'bftools', 'bfconvert')
+        self.bf_sh_path = os.path.join(tools_dir, 'bftools', 'bf.sh')
+        print(self.bfconvert_path, self.bf_sh_path)
+
+        # Ensure the tools directory exists
+        try:
+            if not os.path.exists(tools_dir):
+                os.makedirs(tools_dir)
+        except PermissionError:
+            raise PermissionError(f"Permission denied: Cannot create directory {tools_dir}")
+
+        # If bftools folder does not exist, check for bftools.zip or download it
+        if not os.path.exists(os.path.join(tools_dir, 'bftools')):
+            zip_path = os.path.join(tools_dir, 'bftools.zip')
+
+            if not os.path.exists(zip_path):
+                url = 'https://downloads.openmicroscopy.org/bio-formats/latest/artifacts/bftools.zip'
+                print(f"Downloading bfconvert from {url}...")
+                urllib.request.urlretrieve(url, zip_path)
+
+            print(f"Unzipping {zip_path}...")
+            try:
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    zip_ref.extractall(tools_dir)
+            except zipfile.BadZipFile:
+                raise zipfile.BadZipFile(f"Invalid ZIP file: {zip_path}")
+
+            if os.path.exists(zip_path):
+                os.remove(zip_path)
+
+            print(f"bfconvert set up at {self.bfconvert_path}")
+        
+        system = platform.system().lower()
+        if system == 'linux':
+            
+            try:
+                os.chmod(self.bf_sh_path, os.stat(self.bf_sh_path).st_mode | 0o111)
+                os.chmod(self.bfconvert_path, os.stat(self.bfconvert_path).st_mode | 0o111)
+            except PermissionError:
+                raise PermissionError(f"Permission denied: Cannot chmod files")
+
+        # Print bfconvert version
+        try:
+            version_output = subprocess.check_output([self.bfconvert_path, "-version"])
+            print(f"bfconvert version: {version_output.decode('utf-8').strip()}")
+        except subprocess.CalledProcessError:
+            raise subprocess.CalledProcessError(1, [self.bfconvert_path, "-version"], output="Failed to get bfconvert version.")
+
+        return self.bfconvert_path
+    
+    def set_environment_paths(self):
         """
         Set the JAVA_HOME path based on the OS type.
         If the path is not found in the predefined paths dictionary, the function tries
         to automatically find the JAVA_HOME path from the system.
         """
-        os_type = os.name
-        paths = {
-            "posix": "/usr/lib/jvm/jdk-17/",
-            # Extend this dictionary for other OS types if needed
-        }
-        java_path = paths.get(os_type, TileStitcher.get_system_java_home())
-        print(f"Java path not specified , Setting Java path to {java_path}")
-        os.environ["JAVA_HOME"] = java_path
-
-    @staticmethod
-    def get_system_java_home():
+        print('Setting Environment Paths')
+        if "JAVA_HOME" in os.environ and os.environ["JAVA_HOME"]:
+            # If JAVA_HOME is already set by the user, use that.
+            print('Java Home is already set')
+            return
+        
+        # Try to get the JAVA_HOME from the echo command
+        java_home = self.get_system_java_home()
+        if not java_home:
+            raise EnvironmentError("JAVA_HOME not found. Please set it before proceeding or provide it explicitly.")
+        
+        print(f"Setting Java path to {java_home}")
+        os.environ["JAVA_HOME"] = java_home
+    
+    def get_system_java_home(self):
         """
         Try to automatically find the JAVA_HOME path from the system.
         Return it if found, otherwise return an empty string.
         """
         try:
-            java_home = os.popen("echo $JAVA_HOME").read().strip()
+            # Execute the echo command to get the JAVA_HOME
+            java_home = subprocess.getoutput("echo $JAVA_HOME").strip()
+            if not java_home:
+                raise EnvironmentError("Unable to retrieve JAVA_HOME from the system.")
             return java_home
         except Exception as e:
             print(f"Error retrieving JAVA_HOME from the system: {e}")
             return ""
-
-    def run_image_stitching(self, infiles, fileout):
+    
+    def run_image_stitching(self, infiles, fileout, downsamples= [1,8], separate_series= False):
         """
         Perform image stitching on the provided TIFF files and output a stitched OME-TIFF image.
         """
         try:
             infiles = self._collect_tif_files(infiles)
-            fileout = self._get_outfile(fileout)
+            fileout, file_jpype = self._get_outfile(fileout)
 
-            if not infiles or not fileout:
+            if not infiles or not file_jpype:
                 return
 
             server = self.parse_regions(infiles)
             server = self.ImageServers.pyramidalize(server)
-            self._write_pyramidal_image_server(server, fileout)
+            self._write_pyramidal_image_server(server, file_jpype,downsamples)
 
             server.close()
-            print(f"Image stitching completed. Output file: {fileout}")
+            print(f"Image stitching completed. Output file: {file_jpype}")
+            
+            if separate_series:
+                self.run_bfconvert(fileout)
 
         except Exception as e:
             print(f"Error running image stitching: {e}")
             traceback.print_exc()
 
+            
     def _start_jvm(self):
+
         """Start the Java Virtual Machine and import necessary QuPath classes."""
         if not jpype.isJVMStarted():
             try:
-                # Change it to -Xmx10g or any other value, based on the available system memory.
+                # Set memory usage and classpath for the JVM
+                memory_usage = f"-Xmx{self.memory}"
+                class_path_option = "-Djava.class.path=%s" % self.classpath
+
+                # Try to start the JVM with the specified options
                 jpype.startJVM(
-                    f"-Xmx{self.memory}", "-Djava.class.path=%s" % self.classpath
+                    memory_usage,
+                    class_path_option
                 )
+                
+                print(f"Using JVM version: {jpype.getJVMVersion()}")
+
+                # Import necessary QuPath classes
                 self._import_qupath_classes()
+
             except Exception as e:
+                # Catch any exception that occurs during JVM startup and print the traceback
                 print(f"Error occurred while starting JVM: {e}")
                 traceback.print_exc()
-                exit(1)
+                sys.exit(1)
+            else:
+                print("JVM started successfully")
+        else:
+            print("JVM was already started")
 
     def _import_qupath_classes(self):
         """Import necessary QuPath classes after starting JVM."""
@@ -139,7 +229,7 @@ class TileStitcher:
         """Get the output file object for the stitched image."""
         if not fileout.endswith(".ome.tif"):
             fileout += ".ome.tif"
-        return jpype.JClass("java.io.File")(fileout)
+        return fileout, jpype.JClass("java.io.File")(fileout)
 
     def parseRegion(self, file, z=0, t=0):
         if self.checkTIFF(file):
@@ -223,7 +313,7 @@ class TileStitcher:
                 traceback.print_exc()
         return builder.build()
 
-    def _write_pyramidal_image_server(self, server, fileout, downsamples=[1, 32]):
+    def _write_pyramidal_image_server(self, server, fileout, downsamples):
         """Convert the parsed image regions into a pyramidal image server and write to file."""
         # Convert the parsed regions into a pyramidal image server and write to file
 
@@ -242,3 +332,31 @@ class TileStitcher:
         except Exception as e:
             print(f"Error writing pyramidal image server to file {fileout}: {e}")
             traceback.print_exc()
+            
+    def run_bfconvert(self, stitched_image_path, bfconverted_path=None):
+        if not self.is_bfconvert_available():
+            print("bfconvert command not available. Skipping bfconvert step.")
+            return
+        
+        if not bfconverted_path:
+            base_path, ext = os.path.splitext(stitched_image_path)
+            bfconverted_path = f"{base_path}_sep.tif"
+        
+        bfconvert_command = f"./{self.bfconvert_path} -series 0 -separate '{stitched_image_path}' '{bfconverted_path}'"
+        
+        try:
+            subprocess.run(bfconvert_command, shell=True, check=True)
+            print(f"bfconvert completed. Output file: {bfconverted_path}")
+        except subprocess.CalledProcessError:
+            print("Error running bfconvert command.")
+            
+    def is_bfconvert_available(self):
+        try:
+            result = subprocess.run([f'./{self.bfconvert_path}', "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if result.returncode == 0:
+                return True
+            else:
+                return False
+        except FileNotFoundError:
+            return False
+

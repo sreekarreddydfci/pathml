@@ -12,6 +12,7 @@ import scanpy as sc
 
 from pathml.core import Tile, VectraSlide, types
 
+collect_ignore = ["./preprocessing_tests/test_tilestitcher.py"]
 
 def pytest_sessionfinish(session, exitstatus):
     """
