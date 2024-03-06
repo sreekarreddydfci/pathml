@@ -70,7 +70,7 @@ def tileVectra():
     Example of pathml.core.Tile representation of Vectra image
     """
     slidedata = VectraSlide("tests/testdata/small_vectra.qptiff", backend="bioformats")
-    region = slidedata.slide.extract_region(location=(0, 0), size=(500, 500))
+    region = slidedata.slide.extract_region(location=(0, 0), size=(256, 256))
 
     # make mask object
     masks = np.random.randint(
@@ -100,3 +100,24 @@ def anndata():
     """
     adata = sc.datasets.pbmc3k_processed()
     return adata
+
+
+@pytest.fixture
+def tileCODEX():
+    """
+    Example of pathml.core.Tile representation of CODEX image.
+    """
+    # Set dimensions for the mock CODEX image
+    x_dim, y_dim, z_dim, c_dim, t_dim = 100, 100, 3, 4, 5  # Example dimensions
+
+    # Create a mock CODEX image
+    codex_image = np.random.rand(x_dim, y_dim, z_dim, c_dim, t_dim)
+
+    # Create and return a Tile object
+    tile = Tile(
+        image=codex_image,
+        coords=(0, 0),
+        slide_type=types.CODEX,  # Assuming 'CODEX' is a valid type
+        # Additional properties like masks and labels can be added as needed
+    )
+    return tile

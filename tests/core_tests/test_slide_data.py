@@ -11,7 +11,14 @@ import pytest
 from dask.distributed import Client
 
 import pathml
-from pathml.core import HESlide, MultiparametricSlide, SlideData, Tile
+from pathml.core import (
+    CODEXSlide,
+    HESlide,
+    IHCSlide,
+    MultiparametricSlide,
+    SlideData,
+    Tile,
+)
 from pathml.core.slide_data import infer_backend
 from pathml.preprocessing import BoxBlur, Pipeline
 
@@ -33,6 +40,21 @@ def test_repr(slide):
 )
 def test_infer_backend(path, backend):
     assert infer_backend(path) == backend
+
+
+def test_infer_backend_unsupported_extension():
+    # Define a file path with an unsupported extension
+    unsupported_path = "unsupported_file.xyz"
+
+    # Use pytest.raises to verify that a ValueError is raised with the expected message
+    with pytest.raises(ValueError) as excinfo:
+        infer_backend(unsupported_path)
+
+    # Check if the error message contains the expected content
+    assert (
+        f"input path {unsupported_path} doesn't match any supported file extensions"
+        in str(excinfo.value)
+    )
 
 
 def test_write_with_array_labels(tmp_path, example_slide_data):
@@ -78,6 +100,30 @@ def multiparametric_slide():
 def test_multiparametric(multiparametric_slide):
     assert isinstance(multiparametric_slide, SlideData)
     assert multiparametric_slide.slide_type == pathml.types.IF
+
+
+@pytest.fixture
+def ihc_slide_path():
+    return "tests/testdata/small_HE.svs"
+
+
+@pytest.fixture
+def codex_slide_path():
+    return "tests/testdata/small_vectra.qptiff"
+
+
+def test_ihc_slide_creation(ihc_slide_path):
+    slide = IHCSlide(ihc_slide_path)
+    assert isinstance(slide, SlideData)
+    assert slide.slide_type == pathml.types.IHC
+    # Assuming 'backend' needs to be explicitly passed for IHCSlide, otherwise, test its default if applicable
+
+
+def test_codex_slide_creation_with_default_backend(codex_slide_path):
+    slide = CODEXSlide(codex_slide_path)
+    assert isinstance(slide, SlideData)
+    assert slide.slide_type == pathml.types.CODEX
+    assert slide.backend == "bioformats"
 
 
 @pytest.mark.parametrize("shape", [500, (500, 400)])
